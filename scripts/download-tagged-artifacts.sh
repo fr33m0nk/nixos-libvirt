@@ -50,15 +50,54 @@ download_artifact() {
     return 1
   fi
 
+  OUTFILE="$IMAGEDIR/${name}.zip"
   echo "[$arch] Downloading $name ($ART_SIZE_MB MB)..."
-  curl -L -o "$IMAGEDIR/${name}.zip" \
-    --progress-bar \
-    --write-out "\n[$arch] Done: %{size_download} bytes in %{time_total}s (%{speed_download} B/s)\n" \
-    "$DOWNLOAD_URL"
+
+  # Start curl in background, then poll file size for progress
+  START_TS=$(date +%s)
+  curl -s -L -o "$OUTFILE" "$DOWNLOAD_URL" &
+  CURL_PID=$!
+
+  while kill -0 $CURL_PID 2>/dev/null; do
+    sleep 2
+    if [ -f "$OUTFILE" ]; then
+      DL_BYTES=$(wc -c < "$OUTFILE" 2>/dev/null || echo 0)
+      if [ "$ART_SIZE" -gt 0 ] 2>/dev/null; then
+        DL_PCT=$(echo "scale=1; $DL_BYTES * 100 / $ART_SIZE" | bc)
+      else
+        DL_PCT="??"
+      fi
+      DL_MB=$(echo "scale=1; $DL_BYTES / 1048576" | bc)
+      ELAPSED=$(($(date +%s) - START_TS))
+      if [ "$ELAPSED" -gt 0 ] && [ "$DL_BYTES" -gt 0 ]; then
+        SPEED_KB=$(echo "scale=0; $DL_BYTES / $ELAPSED / 1024" | bc)
+        SPEED_STR="${SPEED_KB} KB/s"
+      else
+        SPEED_STR="..."
+      fi
+      printf "  [$arch] %s / %s MB (%s%%)  %s\n" "$DL_MB" "$ART_SIZE_MB" "$DL_PCT" "$SPEED_STR"
+    fi
+  done
+  wait $CURL_PID
+  CURL_EXIT=$?
+
+  ELAPSED=$(($(date +%s) - START_TS))
+  DL_BYTES=$(wc -c < "$OUTFILE" 2>/dev/null || echo 0)
+  if [ "$ELAPSED" -gt 0 ] && [ "$DL_BYTES" -gt 0 ]; then
+    AVG_SPEED=$(echo "scale=0; $DL_BYTES / $ELAPSED / 1024" | bc)
+  else
+    AVG_SPEED="??"
+  fi
+  printf "  [$arch] Done: %s bytes in %ss (%s KB/s avg)\n" "$DL_BYTES" "$ELAPSED" "$AVG_SPEED"
+
+  if [ $CURL_EXIT -ne 0 ]; then
+    echo "ERROR: curl failed with exit code $CURL_EXIT"
+    return $CURL_EXIT
+  fi
 
   echo "[$arch] Extracting..."
-  unzip -o -q "$IMAGEDIR/${name}.zip" -d "$IMAGEDIR"
-  rm "$IMAGEDIR/${name}.zip"
+  unzip -o -q "$OUTFILE" -d "$IMAGEDIR"
+  rm "$OUTFILE"
   echo "[$arch] Complete."
 }
 
