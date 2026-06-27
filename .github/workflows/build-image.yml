@@ -80,14 +80,25 @@ jobs:
           sudo apt-get install -y ovmf qemu-efi-aarch64 sshpass
           sudo systemctl start libvirtd
           sudo systemctl enable libvirtd
-          # Detect UEFI firmware paths. Exclude secboot/snakeoil variants
-          # which require keys the VM doesn't have.
+          # Pick a matched, non-secureboot UEFI firmware pair. Secure-boot
+          # variants (*secboot*, *.ms.*, *snakeoil*) need enrolled keys/SMM
+          # the test VM doesn't have, and CODE/VARS must come from the same
+          # build (both _4M, or both legacy) or the VM won't boot.
+          pick_first() {
+            for f in "$@"; do [ -f "$f" ] && { echo "$f"; return 0; }; done
+            return 1
+          }
           if [ "${{ matrix.guest-arch }}" = "aarch64" ]; then
-            OVMF_CODE=$(find /usr/share/AAVMF -name 'AAVMF_CODE*' ! -name '*secboot*' -print -quit)
-            OVMF_VARS=$(find /usr/share/AAVMF -name 'AAVMF_VARS*' ! -name '*snakeoil*' ! -name '*secboot*' -print -quit)
+            OVMF_CODE=$(pick_first /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/AAVMF/AAVMF_CODE_4M.fd)
+            OVMF_VARS=$(pick_first /usr/share/AAVMF/AAVMF_VARS.fd /usr/share/AAVMF/AAVMF_VARS_4M.fd)
           else
-            OVMF_CODE=$(find /usr/share/OVMF -name 'OVMF_CODE*' -print -quit)
-            OVMF_VARS=$(find /usr/share/OVMF -name 'OVMF_VARS*' -print -quit)
+            OVMF_CODE=$(pick_first /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd)
+            OVMF_VARS=$(pick_first /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd)
+          fi
+          if [ -z "$OVMF_CODE" ] || [ -z "$OVMF_VARS" ]; then
+            echo "ERROR: could not find a non-secureboot UEFI firmware pair"
+            ls -la /usr/share/OVMF /usr/share/AAVMF 2>/dev/null || true
+            exit 1
           fi
           echo "OVMF_CODE=$OVMF_CODE" >> "$GITHUB_ENV"
           echo "OVMF_VARS=$OVMF_VARS" >> "$GITHUB_ENV"
@@ -133,6 +144,9 @@ jobs:
               <nvram>/var/lib/libvirt/qemu/nvram/nixos-test_VARS.fd</nvram>
               <boot dev='hd'/>
             </os>
+            <features>
+              <acpi/>
+            </features>
             ${CPU_XML}
             <devices>
               <disk type='file' device='disk'>
@@ -174,9 +188,10 @@ jobs:
           fi
           # TCG emulation is too slow for a realistic boot test — the domain
           # started successfully (domstate check passed above), which is the
-          # signal we need from non-KVM runners.
-          if [ ! -e /dev/kvm ]; then
-            echo "No KVM available — skipping guest-agent boot check (TCG too slow). Domain started OK."
+          # signal we need. We run under TCG for cross-arch guests (even when
+          # /dev/kvm exists on the host) or on runners without KVM at all.
+          if [ "$IS_CROSS" = "true" ] || [ ! -e /dev/kvm ]; then
+            echo "Using TCG (cross-arch or no KVM) — skipping guest-agent boot check (too slow). Domain started OK."
             exit 0
           fi
           echo "Waiting for QEMU guest agent to come up (max 850s)..."
@@ -199,9 +214,9 @@ jobs:
         timeout-minutes: 3
         run: |
           set -eux
-          # TCG is too slow for full boot — the KVM gate is in the previous step.
-          if [ ! -e /dev/kvm ]; then
-            echo "No KVM available — skipping SSH verification."
+          # TCG is too slow for full boot — mirror the boot-check gate above.
+          if [ "$IS_CROSS" = "true" ] || [ ! -e /dev/kvm ]; then
+            echo "Using TCG (cross-arch or no KVM) — skipping SSH verification."
             exit 0
           fi
           # Get VM IP from guest agent
