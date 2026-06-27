@@ -60,9 +60,7 @@ jobs:
       IS_CROSS: ${{ (matrix.os == 'ubuntu-26.04' && matrix.guest-arch == 'aarch64') || (matrix.os == 'ubuntu-26.04-arm' && matrix.guest-arch == 'x86_64') }}
       # aarch64 uses 'virt' machine; x86_64 uses 'q35'
       MACHINE_TYPE: ${{ matrix.guest-arch == 'aarch64' && 'virt' || 'q35' }}
-      # UEFI firmware paths per guest architecture
-      OVMF_CODE: ${{ matrix.guest-arch == 'aarch64' && '/usr/share/AAVMF/AAVMF_CODE.fd' || '/usr/share/OVMF/OVMF_CODE.fd' }}
-      OVMF_VARS: ${{ matrix.guest-arch == 'aarch64' && '/usr/share/AAVMF/AAVMF_VARS.fd' || '/usr/share/OVMF/OVMF_VARS.fd' }}
+      # UEFI firmware paths are detected at runtime (filenames vary by distro: .fd, _4M.fd, etc.)
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -77,6 +75,17 @@ jobs:
           sudo apt-get install -y ovmf qemu-efi-aarch64 sshpass
           sudo systemctl start libvirtd
           sudo systemctl enable libvirtd
+          # Detect actual UEFI firmware paths (filenames vary by distro: OVMF_CODE.fd vs OVMF_CODE_4M.fd, etc.)
+          if [ "${{ matrix.guest-arch }}" = "aarch64" ]; then
+            OVMF_CODE=$(find /usr/share/AAVMF -name 'AAVMF_CODE*' -print -quit)
+            OVMF_VARS=$(find /usr/share/AAVMF -name 'AAVMF_VARS*' -print -quit)
+          else
+            OVMF_CODE=$(find /usr/share/OVMF -name 'OVMF_CODE*' -print -quit)
+            OVMF_VARS=$(find /usr/share/OVMF -name 'OVMF_VARS*' -print -quit)
+          fi
+          echo "OVMF_CODE=$OVMF_CODE" >> "$GITHUB_ENV"
+          echo "OVMF_VARS=$OVMF_VARS" >> "$GITHUB_ENV"
+          echo "Detected firmware: CODE=$OVMF_CODE  VARS=$OVMF_VARS"
 
       - name: Download ${{ matrix.guest-arch }} image artifact
         uses: actions/download-artifact@v8
