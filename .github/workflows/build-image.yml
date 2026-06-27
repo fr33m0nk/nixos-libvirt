@@ -157,15 +157,25 @@ jobs:
         timeout-minutes: 15
         run: |
           set -eux
-          echo "Waiting for QEMU guest agent to come up (max 300s)..."
-          for i in $(seq 1 60); do
+          # Confirm the domain is actually running
+          DOMSTATE=$(sudo virsh domstate nixos-test)
+          echo "Domain state: $DOMSTATE"
+          if [ "$DOMSTATE" != "running" ]; then
+            echo "ERROR: Domain is not running. Domain info:"
+            sudo virsh dominfo nixos-test || true
+            exit 1
+          fi
+          echo "Waiting for QEMU guest agent to come up (max 850s)..."
+          for i in $(seq 1 170); do
             if sudo virsh qemu-agent-command nixos-test '{"execute":"guest-info"}' 2>/dev/null | grep -q "version"; then
               echo "Guest agent is alive!"
               break
             fi
-            if [ "$i" -eq 60 ]; then
-              echo "ERROR: Guest agent never came up. VM serial console log:"
-              sudo virsh console nixos-test --force 2>&1 | head -50 || true
+            if [ "$i" -eq 170 ]; then
+              echo "ERROR: Guest agent never came up after 15 min."
+              echo "Domain state: $(sudo virsh domstate nixos-test)"
+              echo "Domain info:"
+              sudo virsh dominfo nixos-test || true
               exit 1
             fi
             sleep 5
