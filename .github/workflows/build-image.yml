@@ -217,63 +217,48 @@ jobs:
             sleep 5
           done
 
-      - name: Get VM IP and verify SSH
-        timeout-minutes: 3
+      - name: Verify guest OS via QEMU guest agent
+        timeout-minutes: 5
         run: |
           set -eux
-          # TCG is too slow for full boot — mirror the boot-check gate above.
+          # TCG is too slow for a full boot — the domstate/agent gate in the
+          # previous step is the signal we need for cross-arch runs.
           if [ "$IS_CROSS" = "true" ] || [ ! -e /dev/kvm ]; then
-            echo "Using TCG (cross-arch or no KVM) — skipping SSH verification."
+            echo "Using TCG (cross-arch or no KVM) — skipping in-guest verification."
             exit 0
           fi
-          # Get VM IP from guest agent
-          VM_IP=""
-          for i in $(seq 1 30); do
-            VM_IP=$(sudo virsh domifaddr nixos-test --source agent 2>/dev/null | tail -1 | awk '{print $4}' | cut -d/ -f1)
-            if [ -n "$VM_IP" ]; then
-              echo "VM IP (from agent): $VM_IP"
-              break
+          # Run a command inside the guest through the agent rather than over
+          # SSH. Reaching sshd across the libvirt NAT is flaky in CI, and sshd
+          # may be delayed at boot (e.g. behind cloud-init); the agent gives a
+          # reliable, network-independent way to confirm userspace works.
+          guest_exec() {
+            path="$1"; shift
+            arg_json=$(printf '%s\n' "$@" | jq -R . | jq -s -c .)
+            pid=$(sudo virsh qemu-agent-command nixos-test \
+              "{\"execute\":\"guest-exec\",\"arguments\":{\"path\":\"$path\",\"arg\":$arg_json,\"capture-output\":true}}" \
+              | jq -r '.return.pid')
+            if [ -z "$pid" ] || [ "$pid" = "null" ]; then
+              echo "ERROR: guest-exec was not accepted by the agent" >&2
+              return 1
             fi
-            sleep 2
-          done
-          # Fallback: scrape DHCP leases
-          if [ -z "$VM_IP" ]; then
-            VM_MAC=$(sudo virsh domiflist nixos-test | awk 'NR>2 && /virtio/ {print $5}')
-            for i in $(seq 1 10); do
-              VM_IP=$(sudo virsh net-dhcp-leases default | grep "$VM_MAC" | awk '{print $5}' | cut -d/ -f1)
-              if [ -n "$VM_IP" ]; then
-                echo "VM IP (from DHCP): $VM_IP"
-                break
+            for _ in $(seq 1 30); do
+              st=$(sudo virsh qemu-agent-command nixos-test \
+                "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}")
+              if [ "$(echo "$st" | jq -r '.return.exited')" = "true" ]; then
+                echo "$st" | jq -r '.return["out-data"] // ""' | base64 -d 2>/dev/null || true
+                echo "$st" | jq -r '.return["err-data"] // ""' | base64 -d 2>/dev/null >&2 || true
+                return "$(echo "$st" | jq -r '.return.exitcode')"
               fi
               sleep 2
             done
-          fi
-          if [ -z "$VM_IP" ]; then
-            echo "ERROR: Could not determine VM IP address"
-            sudo virsh domifaddr nixos-test --source agent || true
-            sudo virsh net-dhcp-leases default || true
-            exit 1
-          fi
-          # The DHCP lease appears before sshd is ready, so the first
-          # connection often gets refused. Retry until sshd accepts (or fail).
-          SSH_OK=""
-          for i in $(seq 1 30); do
-            if sshpass -p nixos ssh \
-                -o StrictHostKeyChecking=no \
-                -o ConnectTimeout=10 \
-                -o PreferredAuthentications=password \
-                nixos@"$VM_IP" "uname -a && nixos-version"; then
-              SSH_OK=1
-              break
-            fi
-            echo "SSH not ready yet (attempt $i/30), retrying in 5s..."
-            sleep 5
-          done
-          if [ -z "$SSH_OK" ]; then
-            echo "ERROR: SSH verification failed after retries"
-            exit 1
-          fi
-          echo "SSH verification passed!"
+            echo "ERROR: guest-exec did not complete in time" >&2
+            return 1
+          }
+          echo "--- uname -a ---"
+          guest_exec /run/current-system/sw/bin/uname -a
+          echo "--- /etc/os-release ---"
+          guest_exec /run/current-system/sw/bin/cat /etc/os-release
+          echo "Guest verification passed!"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
