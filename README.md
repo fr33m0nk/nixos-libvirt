@@ -11,7 +11,7 @@ The design goals for **nixos-libvirt** are:
 3. User customization of NixOS libvirt instance is separate from initial image creation
 4. The base image and Nix services module is generic and as reusable by others as possible
 
-If you have comments or suggestions for the design or implementation, please open an [Issue](https://github.com/nixos-lima/nixos-lima/issues).
+If you have comments or suggestions for the design or implementation, please open an [Issue](https://github.com/fr33m0nk/nixos-libvirt/issues).
 
 ## Quickstart
 
@@ -25,13 +25,13 @@ To quickly start a **NixOS** guest using **libvirt**:
 
 ### Option 1: Download a Pre-built Image
 
-Download the latest release image from [GitHub Releases](https://github.com/nixos-lima/nixos-lima/releases).
+Download the latest release image from [GitHub Releases](https://github.com/fr33m0nk/nixos-libvirt/releases).
 
 ```bash
 # Download the image for your architecture
-curl -LO https://github.com/nixos-lima/nixos-lima/releases/download/v0.2.1/nixos-libvirt-v0.2.1-x86_64.qcow2
+curl -LO https://github.com/fr33m0nk/nixos-libvirt/releases/download/v0.2.1/nixos-libvirt-v0.2.1-x86_64.qcow2
 # Or for aarch64:
-curl -LO https://github.com/nixos-lima/nixos-lima/releases/download/v0.2.1/nixos-libvirt-v0.2.1-aarch64.qcow2
+curl -LO https://github.com/fr33m0nk/nixos-libvirt/releases/download/v0.2.1/nixos-libvirt-v0.2.1-aarch64.qcow2
 ```
 
 Copy the image and start the VM:
@@ -95,15 +95,37 @@ sudo nixos-rebuild switch --flake .#
 
 ### Using the nixos-libvirt Module in Your Own Configuration
 
-In your `flake.nix`, include `nixos-libvirt` as a flake input:
+Add `nixos-libvirt` as a flake input and import the module in your NixOS system
+configuration. The module exposes `services.libvirt-guest` with a single
+`enable` toggle that sets up the QEMU guest agent, cloud-init, and a serial
+console — everything the libvirt domain template expects.
 
 ```nix
+# flake.nix
 {
   inputs = {
-    nixos-libvirt.url = "github:nixos-lima/nixos-lima/";
+    nixos-libvirt.url = "github:fr33m0nk/nixos-libvirt";
+  };
+  outputs = { nixos-libvirt, nixpkgs, ... }: {
+    nixosConfigurations.myvm = nixpkgs.lib.nixosSystem {
+      modules = [
+        nixos-libvirt.nixosModules.libvirt
+        {
+          services.libvirt-guest.enable = true;
+          # Optional: host↔guest filesystem sharing via virtiofs
+          services.libvirt-guest.virtiofs.enable = true;
+          services.libvirt-guest.virtiofs.mounts."nixos-config" = {
+            mountPoint = "/mnt/nixos-config";
+          };
+        }
+      ];
+    };
   };
 }
 ```
+
+The `virtiofs` mounts are keyed by the `<target dir>` tag in your domain XML's
+`<filesystem type="mount">` element, so they stay in sync with the host side.
 
 ## Libvirt Domain Configuration
 
@@ -181,7 +203,7 @@ sudo virsh console nixos
 This is a port of [nixos-lima](https://github.com/nixos-lima/nixos-lima) for libvirt. Key differences:
 
 - **No Lima guest agent**: Uses QEMU guest agent instead for host-guest communication
-- **No cidata mounting**: Uses standard filesystems without Lima's cloud-init data mount
+- **Cloud-init via NoCloud ISO**: Cloud-init is supported through a standard cidata ISO (see "Using Cloud-Init" above). What's dropped is Lima's bespoke guest-agent and cidata-mount mechanism (`lima-init.nix`)
 - **Serial console**: Configured for `virsh console` access
 - **KVM-native**: Designed to run directly on KVM with virtio drivers
 - **Static user**: Pre-configured `nixos` user instead of Lima's dynamic user creation

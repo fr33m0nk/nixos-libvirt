@@ -5,4 +5,4 @@ if [ "$#" -ne 1 ]; then
 fi
 NIXOS_LIBVIRT_TAG=$1
 
-gh release download --repo nixos-libvirt/nixos-libvirt -D tmp --pattern "*.qcow2" $NIXOS_LIBVIRT_TAG
+gh release download --repo fr33m0nk/nixos-libvirt -D tmp --pattern "*.qcow2" $NIXOS_LIBVIRT_TAG
