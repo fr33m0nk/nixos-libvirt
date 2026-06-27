@@ -126,8 +126,15 @@ jobs:
           # TCG emulation otherwise (cross-arch, or runners without KVM).
           if [ "$IS_CROSS" = "true" ] || [ ! -e /dev/kvm ]; then
             VIRT_TYPE="qemu"
-            CPU_XML="<cpu mode='custom'><model>max</model></cpu>"
-            echo "Using TCG emulation (type=qemu, cpu=max)"
+            # CPU model under TCG must be one libvirt knows in its cpu_map for
+            # the guest arch. 'max' exists for aarch64 but NOT for x86_64
+            # (it's a QEMU-only meta-model) → use 'qemu64' there.
+            if [ "${{ matrix.guest-arch }}" = "aarch64" ]; then
+              CPU_XML="<cpu mode='custom'><model>max</model></cpu>"
+            else
+              CPU_XML="<cpu mode='custom'><model>qemu64</model></cpu>"
+            fi
+            echo "Using TCG emulation (type=qemu)"
           else
             VIRT_TYPE="kvm"
             CPU_XML="<cpu mode='host-passthrough'/>"
@@ -247,12 +254,25 @@ jobs:
             sudo virsh net-dhcp-leases default || true
             exit 1
           fi
-          # SSH in and verify the OS
-          sshpass -p nixos ssh \
-            -o StrictHostKeyChecking=no \
-            -o ConnectTimeout=10 \
-            -o PreferredAuthentications=password \
-            nixos@"$VM_IP" "uname -a && nixos-version"
+          # The DHCP lease appears before sshd is ready, so the first
+          # connection often gets refused. Retry until sshd accepts (or fail).
+          SSH_OK=""
+          for i in $(seq 1 30); do
+            if sshpass -p nixos ssh \
+                -o StrictHostKeyChecking=no \
+                -o ConnectTimeout=10 \
+                -o PreferredAuthentications=password \
+                nixos@"$VM_IP" "uname -a && nixos-version"; then
+              SSH_OK=1
+              break
+            fi
+            echo "SSH not ready yet (attempt $i/30), retrying in 5s..."
+            sleep 5
+          done
+          if [ -z "$SSH_OK" ]; then
+            echo "ERROR: SSH verification failed after retries"
+            exit 1
+          fi
           echo "SSH verification passed!"
 
       - name: Upload artifacts
