@@ -1,6 +1,11 @@
 name: Build NixOS Libvirt Image
 
-on: [pull_request, merge_group, workflow_dispatch]
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
 
 jobs:
   build:
