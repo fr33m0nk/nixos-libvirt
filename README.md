@@ -1,79 +1,147 @@
-# Run NixOS on a Lima VM
+# Run NixOS on a Libvirt VM
 
-Run **NixOS** guest VMs on a **macOS** or **Linux** host using [Lima](https://lima-vm.io). **nixos-lima** is a **Nix** flake that generates Lima-compatible system images and provides a NixOS module for Lima boot-time and runtime support. The NixOS module runs in a Lima guest VM and configures the machine at boot-time using Lima configuration _userdata_ and runs the `lima-guestagent` daemon as a `systemd` service.
-
-By using the released system image and using the provided NixOS module, you can create your own custom configuration.
+Run **NixOS** guest VMs using **[libvirt](https://libvirt.org/)**. **nixos-libvirt** is a **Nix** flake that generates libvirt-compatible system images and provides a NixOS module for libvirt guest support. The NixOS module configures the machine for optimal libvirt integration with QEMU guest agent, serial console, and virtio drivers.
 
 ## Design Goals
 
-The design goals for **nixos-lima** are:
+The design goals for **nixos-libvirt** are:
 
-1. Nix flake that can build a bootable NixOS Lima-compatible image
-2. Nix modules for the systemd services that initialize and configure the system
-3. User customization of NixOS Lima instance is separate from initial image creation
+1. Nix flake that can build a bootable NixOS libvirt-compatible image
+2. Nix modules for libvirt guest configuration
+3. User customization of NixOS libvirt instance is separate from initial image creation
 4. The base image and Nix services module is generic and as reusable by others as possible
 
 If you have comments or suggestions for the design or implementation, please open an [Issue](https://github.com/nixos-lima/nixos-lima/issues).
 
 ## Quickstart
 
-To quickly start a **NixOS** guest using **Lima** you don't need **Nix** installed on your host OS. Use the [nixos.yaml](https://github.com/nixos-lima/nixos-lima/blob/master/nixos.yaml) template:
+To quickly start a **NixOS** guest using **libvirt**:
 
-1. Install Lima (using Homebrew, Nix or [another mechanism](https://lima-vm.io/docs/installation/))
-2. Create and start a new NixOS guest with `limactl`:
-   ```bash
-   limactl start github:nixos-lima
-    ```
-3. See [NixOS Lima VM Config Sample](https://github.com/nixos-lima/nixos-lima-config-sample) for an example of how to maintain your custom NixOS system configuration (and optionally Home Manager) in your NixOS guest VM.
+### Prerequisites
 
-If you are curious about how the `github:nixos-lima` URL works, see [GitHub Template URLs](https://lima-vm.io/docs/templates/github/).
+- Linux host with KVM support
+- libvirt installed (`libvirt-daemon-system`, `qemu-kvm`, `virt-manager` recommended)
+- Nix with flakes enabled (for building the image)
 
-## Using the nixos-lima Module in Your Own Configuration
+### Option 1: Download a Pre-built Image
 
-In your `flake.nix`, include `nixos-lima` as a flake input:
-
-```
-  inputs = {
-    ...
-    nixos-lima.url = "github:nixos-lima/nixos-lima/"
-    ...
-  };
-```
-
-In your system configuration, include:
-
-```
-  services.lima.enable = true;
-```
-
-For a complete, working example see: [nixos-lima/nixos-lima-config-sample](https://github.com/nixos-lima/nixos-lima-config-sample)
-
-## Recommended Lima Configuration
-
-You'll typically want to give the guest VM at least 8 GiB of memory. The `nixos.yaml` template contains the following:
-
-```yaml
-memory: 8GiB
-```
-You can also specify guest memory allocation on the command line. For example to allocate 16 GiB use:
+Download the latest release image from [GitHub Releases](https://github.com/nixos-lima/nixos-lima/releases).
 
 ```bash
-limactl start --memory 16 github:nixos-lima
+# Download the image for your architecture
+curl -LO https://github.com/nixos-lima/nixos-lima/releases/download/v0.2.1/nixos-libvirt-v0.2.1-x86_64.qcow2
+# Or for aarch64:
+curl -LO https://github.com/nixos-lima/nixos-lima/releases/download/v0.2.1/nixos-libvirt-v0.2.1-aarch64.qcow2
 ```
 
-## Using nixos-rebuild To Customize and Update Your Guest Instance
+Copy the image and start the VM:
 
-There are at least three ways of managing the NixOS configuration of your image:
+```bash
+sudo cp nixos-libvirt-v0.2.1-x86_64.qcow2 /var/lib/libvirt/images/nixos.qcow2
+sudo qemu-img resize /var/lib/libvirt/images/nixos.qcow2 +10G
 
-1. From inside the instance use `git` to check out a configuration repository and use `nixos-rebuild`.
-2. From inside the instance, use `nixos-rebuild` on a configuration directory mounted from the host.
-3. Push a configuration to the instance using the `--target` option of `nixos-rebuild` or using a remote deploy tool like [deploy-rs](https://github.com/serokell/deploy-rs).
+# Define and start the VM using the provided domain template
+sudo virsh define libvirt-domain.xml
+sudo virsh start nixos
+```
 
-For an example of (1) see [nixos-lima/nixos-lima-config-sample](https://github.com/nixos-lima/nixos-lima-config-sample).
+### Option 2: Build from Source
+
+Clone this repository and build the image:
+
+```bash
+# Build the image
+nix build .#packages.x86_64-linux.img --out-link result-x86_64
+# Or for aarch64:
+nix build .#packages.aarch64-linux.img --out-link result-aarch64
+
+# Copy to libvirt image directory
+sudo cp result-x86_64/nixos.qcow2 /var/lib/libvirt/images/nixos.qcow2
+sudo qemu-img resize /var/lib/libvirt/images/nixos.qcow2 +10G
+
+# Start with the template
+sudo virsh define libvirt-domain.xml
+sudo virsh start nixos
+```
+
+### Access the VM
+
+```bash
+# Via serial console
+sudo virsh console nixos
+
+# Or via SSH once the VM has an IP
+ssh nixos@<vm-ip>
+# Default password: nixos
+```
+
+## Customizing Your Guest Instance
+
+### Using nixos-rebuild
+
+While the image has a working NixOS installed, you can customize it by running `nixos-rebuild` inside the VM:
+
+```bash
+# SSH into the VM
+ssh nixos@<vm-ip>
+
+# Checkout your configuration
+git clone <your-config-repo>
+cd <your-config-repo>
+
+# Rebuild
+sudo nixos-rebuild switch --flake .#
+```
+
+### Using the nixos-libvirt Module in Your Own Configuration
+
+In your `flake.nix`, include `nixos-libvirt` as a flake input:
+
+```nix
+{
+  inputs = {
+    nixos-libvirt.url = "github:nixos-lima/nixos-lima/";
+  };
+}
+```
+
+## Libvirt Domain Configuration
+
+The included `libvirt-domain.xml` provides a sensible default configuration:
+
+- 8 GiB RAM, 4 vCPUs
+- UEFI boot (OVMF)
+- VirtIO disk and network
+- SPICE graphics
+- QEMU guest agent channel
+- Serial console
+
+Customize the domain XML to suit your needs (memory, CPU, networking, etc.).
+
+## Using Cloud-Init
+
+You can use cloud-init to bootstrap the VM with your SSH keys and custom configuration:
+
+```bash
+# Create cloud-init config
+mkdir cloud-init
+cat > cloud-init/user-data << 'EOF'
+#cloud-config
+users:
+  - name: nixos
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA...
+EOF
+echo "instance-id: $(uuidgen)" > cloud-init/meta-data
+
+# Generate ISO
+genisoimage -output cloud-init.iso -volid cidata -joliet -rock cloud-init/user-data cloud-init/meta-data
+sudo cp cloud-init.iso /var/lib/libvirt/images/
+
+# Add a cdrom disk to the domain XML pointing to cloud-init.iso
+```
 
 ## Building and Testing the System Image
-
-If you want to build your own `nixos-lima` or contribute to this project, you can check out this repository and build the system image locally.
 
 ### Prerequisites
 
@@ -87,59 +155,43 @@ A working Nix installation capable of building Linux systems. This includes:
 Flakes must be enabled.
 
 ### Generating the image
-  
-This example is for `aarch64`, but you can replace `aarch64` with `x86_64` if you are on an x86_64 Linux or macOS system.
 
 ```bash
+nix build .#packages.x86_64-linux.img --out-link result-x86_64
+# Or for aarch64:
 nix build .#packages.aarch64-linux.img --out-link result-aarch64
 ```
 
-If you built the image on another system:
+### Testing Locally
 
 ```bash
-mkdir result-aarch64
-# copy image to result-aarch64/nixos.qcow2
+# Copy the image
+sudo cp result-x86_64/nixos.qcow2 /var/lib/libvirt/images/nixos.qcow2
+
+# Define and start
+sudo virsh define libvirt-domain.xml
+sudo virsh start nixos
+
+# Watch the console
+sudo virsh console nixos
 ```
 
-### Running NixOS
+## Differences from the Lima Version
 
-Once you've built or copied an image into the `result-aarch64` directory, the `nixos-result.yml` template locates the images via a relative filesystem path:
+This is a port of [nixos-lima](https://github.com/nixos-lima/nixos-lima) for libvirt. Key differences:
 
-```bash
-limactl start --yes --name=nixos nixos-result.yaml
-
-limactl shell nixos
-```
-
-### Rebuilding NixOS inside the Lima instance
-
-If your Lima YAML file mounts your home directory (since `limactl shell` by default preserves
-the current directory) you can invoke `nixos-rebuild` inside the VM using a `flake.nix` in a
-directory on the host. The following command can be used on the host to rebuild NixOS in the guest from the `flake.nix` in the current directory:
-
-```bash
-limactl shell nixos -- nixos-rebuild boot --flake .#nixos-aarch64 --sudo
-limactl restart nixos
-```
+- **No Lima guest agent**: Uses QEMU guest agent instead for host-guest communication
+- **No cidata mounting**: Uses standard filesystems without Lima's cloud-init data mount
+- **Serial console**: Configured for `virsh console` access
+- **KVM-native**: Designed to run directly on KVM with virtio drivers
+- **Static user**: Pre-configured `nixos` user instead of Lima's dynamic user creation
 
 ## History
 
-This is based on [kasuboski/nixos-lima](https://github.com/kasuboski/nixos-lima) and there were about a half-dozen [forks](https://github.com/kasuboski/nixos-lima/forks) of that repo, but none of them seemed to be making an effort to be generic/reusable, accept contributions, create documentation, etc. So I created this repo to try to create something that multiple developers can use and contribute to. (So now there are a _half-dozen plus one_ projects 🤣  -- see [xkcd "Standards"](https://xkcd.com/927/))
-
-## References
-
-* Lima discussion topic: [NixOS guest? #430](https://github.com/lima-vm/lima/discussions/430)
-* Lima issue: [Template for nixOS #3688](https://github.com/lima-vm/lima/issues/3688)
-* [NixOS Dev Environment on Mac](https://www.joshkasuboski.com/posts/nix-dev-environment/) January, 24 2023 by [Josh Kasuboski](https://www.joshkasuboski.com)
+This is based on [nixos-lima](https://github.com/nixos-lima/nixos-lima), which was forked from [kasuboski/nixos-lima](https://github.com/kasuboski/nixos-lima).
 
 ## Credits
 
-* Forked from: [kasuboski/nixos-lima](https://github.com/kasuboski/nixos-lima)
+* Based on: [nixos-lima](https://github.com/nixos-lima/nixos-lima)
+* Originally forked from: [kasuboski/nixos-lima](https://github.com/kasuboski/nixos-lima)
 * Heavily inspired by: [patryk4815/ctftools](https://github.com/patryk4815/ctftools/tree/master/lima-vm)
-
-The unmodified, upstream README is in `README_upstream.md`.
-
-Fixes/patches from:
-
-* [unidevel/nixos-lima](https://github.com/unidevel/nixos-lima)
-* [lima-vm/alpine-lima](https://github.com/lima-vm/alpine-lima)

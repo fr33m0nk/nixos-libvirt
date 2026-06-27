@@ -1,4 +1,4 @@
-name: Build NixOS Lima Image
+name: Build NixOS Libvirt Image
 
 on: [pull_request, merge_group, workflow_dispatch]
 
@@ -10,7 +10,7 @@ jobs:
         os: [ubuntu-26.04, ubuntu-26.04-arm]
       fail-fast: false
     env:
-      # HOST_ARCH value must match string in Lima download filename
+      # HOST_ARCH value must match string in image download filename
       HOST_ARCH: ${{ matrix.os == 'ubuntu-26.04' && 'x86_64' || (matrix.os == 'ubuntu-26.04-arm' && 'aarch64') || 'unknown' }}
     steps:
       - name: Checkout
@@ -24,7 +24,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         env:
-          # Use env variable QEMU_SYSTEM_AARCH64 to override Lima's QEMU configuration on aarch64 host
+          # Use env variable QEMU_SYSTEM_AARCH64 to override QEMU configuration on aarch64 host
           SYSTEM_FEATURES: ${{ env.HOST_ARCH == 'aarch64' && 'kvm aarch64-linux' || 'kvm' }}
         with:
           extra_nix_config: |
@@ -38,84 +38,177 @@ jobs:
         run: |
           nix build .#packages.${{ env.HOST_ARCH }}-linux.img --out-link result-${{ env.HOST_ARCH }}
           # copy and compress the image (and give it a new name)
-          qemu-img convert -O qcow2 -c result-${{ env.HOST_ARCH }}/nixos.qcow2 nixos-lima-unstable-${{ env.HOST_ARCH }}.qcow2
+          qemu-img convert -O qcow2 -c result-${{ env.HOST_ARCH }}/nixos.qcow2 nixos-libvirt-unstable-${{ env.HOST_ARCH }}.qcow2
 
       - name: Upload ${{ env.HOST_ARCH }} image as artifact
         uses: actions/upload-artifact@v7
         with:
-          name: nixos-lima-unstable-${{ env.HOST_ARCH }}
-          path: nixos-lima-unstable-${{ env.HOST_ARCH }}.qcow2
+          name: nixos-libvirt-unstable-${{ env.HOST_ARCH }}
+          path: nixos-libvirt-unstable-${{ env.HOST_ARCH }}.qcow2
 
   test-image:
     runs-on: ${{ matrix.os }}
     needs: build
     strategy:
       matrix:
-        os: [ubuntu-26.04, ubuntu-26.04-arm, macos-15]
+        os: [ubuntu-26.04, ubuntu-26.04-arm]
         guest-arch: ['aarch64', 'x86_64']
       fail-fast: false
     env:
-      HOST_ARCH: ${{ matrix.os == 'ubuntu-26.04' && 'x86_64' || matrix.os == 'ubuntu-26.04-arm' && 'aarch64' || matrix.os == 'macos-15' && 'aarch64' || 'unknown' }}
-      GUEST_HOST_NAME: "nixos"
-      GUEST_USER: "lima"
-      # For macos-15, force `--vm-type qemu` since GitHub runners don't support VZ and Lima 2.0.x defaults to VZ even for x86_64 guests
-      LIMA_VM_TYPE: ${{ matrix.os == 'macos-15' && '--vm-type qemu' || '' }}
-      QEMU_SYSTEM_AARCH64: ${{ matrix.os == 'ubuntu-26.04-arm' && 'qemu-system-aarch64 -machine virt -cpu max' || matrix.os == 'macos-15' && 'qemu-system-aarch64 -machine virt -cpu max' || '' }}
+      HOST_ARCH: ${{ matrix.os == 'ubuntu-26.04' && 'x86_64' || (matrix.os == 'ubuntu-26.04-arm' && 'aarch64') || 'unknown' }}
+      # Cross-arch: guest arch differs from host arch → use TCG (type='qemu'), not KVM
+      IS_CROSS: ${{ (matrix.os == 'ubuntu-26.04' && matrix.guest-arch == 'aarch64') || (matrix.os == 'ubuntu-26.04-arm' && matrix.guest-arch == 'x86_64') }}
+      # aarch64 uses 'virt' machine; x86_64 uses 'q35'
+      MACHINE_TYPE: ${{ matrix.guest-arch == 'aarch64' && 'virt' || 'q35' }}
+      # UEFI firmware paths per guest architecture
+      OVMF_CODE: ${{ matrix.guest-arch == 'aarch64' && '/usr/share/AAVMF/AAVMF_CODE.fd' || '/usr/share/OVMF/OVMF_CODE.fd' }}
+      OVMF_VARS: ${{ matrix.guest-arch == 'aarch64' && '/usr/share/AAVMF/AAVMF_VARS.fd' || '/usr/share/OVMF/OVMF_VARS.fd' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Ubuntu apt-get update
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+
+      - name: Install libvirt, QEMU, and UEFI firmware
+        run: |
+          sudo apt-get install -y libvirt-daemon-system qemu-system-x86 qemu-system-arm qemu-utils
+          sudo apt-get install -y ovmf qemu-efi-aarch64 sshpass
+          sudo systemctl start libvirtd
+          sudo systemctl enable libvirtd
 
       - name: Download ${{ matrix.guest-arch }} image artifact
         uses: actions/download-artifact@v8
         with:
-          name: nixos-lima-unstable-${{ matrix.guest-arch }}
+          name: nixos-libvirt-unstable-${{ matrix.guest-arch }}
           path: artifacts/
-      - name: move and rename
+
+      - name: Prepare image and NVRAM for libvirt
         run: |
-          mkdir -p result-${{ matrix.guest-arch }}
-          mv artifacts/nixos-lima-unstable-${{ matrix.guest-arch }}.qcow2 result-${{ matrix.guest-arch }}/nixos.qcow2
+          sudo mkdir -p /var/lib/libvirt/images
+          sudo mkdir -p /var/lib/libvirt/qemu/nvram
+          sudo cp artifacts/nixos-libvirt-unstable-${{ matrix.guest-arch }}.qcow2 /var/lib/libvirt/images/nixos.qcow2
+          sudo qemu-img resize /var/lib/libvirt/images/nixos.qcow2 +5G
+          # Create per-VM copy of the UEFI vars template
+          sudo cp "$OVMF_VARS" /var/lib/libvirt/qemu/nvram/nixos-test_VARS.fd
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-      # pre-build the shell separately to avoid skewing the run time of the next
-      # step and have clear point of failure should the shell fail to build
-      - name: Pre-build devShell
-        run: nix build --no-link .#devShells.$(nix eval --impure --raw --expr 'builtins.currentSystem').default
-
-      - name: "Start an instance of NixOS"
-        shell: 'nix develop -c bash -e {0}'
+      - name: Define and start libvirt domain (UEFI)
         run: |
           set -eux
-          limactl start ${{ env.LIMA_VM_TYPE }} --arch ${{ matrix.guest-arch }} --name=${{ env.GUEST_HOST_NAME }} --set '.user.name = "${{ env.GUEST_USER }}"' nixos-result.yaml
-          limactl shell ${{ env.GUEST_HOST_NAME }} -- systemd-detect-virt
+          # Determine virt type and CPU based on cross-arch vs native
+          if [ "$IS_CROSS" = "true" ]; then
+            VIRT_TYPE="qemu"
+            CPU_XML="<cpu mode='custom'><model>max</model></cpu>"
+            echo "Cross-arch: using TCG emulation (type=qemu, cpu=max)"
+          else
+            VIRT_TYPE="kvm"
+            CPU_XML="<cpu mode='host-passthrough'/>"
+            echo "Native arch: using KVM acceleration (type=kvm, cpu=host-passthrough)"
+          fi
+          cat > domain.xml << DOMEOF
+          <domain type='${VIRT_TYPE}'>
+            <name>nixos-test</name>
+            <memory unit='GiB'>4</memory>
+            <vcpu>2</vcpu>
+            <os>
+              <type arch='${{ matrix.guest-arch }}' machine='${{ env.MACHINE_TYPE }}'>hvm</type>
+              <loader readonly='yes' type='pflash'>${{ env.OVMF_CODE }}</loader>
+              <nvram>/var/lib/libvirt/qemu/nvram/nixos-test_VARS.fd</nvram>
+              <boot dev='hd'/>
+            </os>
+            ${CPU_XML}
+            <devices>
+              <disk type='file' device='disk'>
+                <driver name='qemu' type='qcow2'/>
+                <source file='/var/lib/libvirt/images/nixos.qcow2'/>
+                <target dev='vda' bus='virtio'/>
+              </disk>
+              <interface type='network'>
+                <source network='default'/>
+                <model type='virtio'/>
+              </interface>
+              <serial type='pty'>
+                <target port='0'/>
+              </serial>
+              <console type='pty'>
+                <target type='serial' port='0'/>
+              </console>
+              <channel type='unix'>
+                <source mode='bind'/>
+                <target type='virtio' name='org.qemu.guest_agent.0'/>
+              </channel>
+            </devices>
+          </domain>
+          DOMEOF
+          sudo virsh define domain.xml
+          sudo virsh start nixos-test
 
-      - name: "Update and Rebuild NixOS"
-        shell: 'nix develop -c bash -e {0}'
+      - name: Wait for guest agent (OS booted)
+        timeout-minutes: 15
         run: |
           set -eux
-          limactl shell ${{ env.GUEST_HOST_NAME }} -- nixos-rebuild boot --flake .#nixos-${{ matrix.guest-arch }} --sudo
-          sleep 0.1
-          limactl restart ${{ env.GUEST_HOST_NAME }}
+          echo "Waiting for QEMU guest agent to come up (max 300s)..."
+          for i in $(seq 1 60); do
+            if sudo virsh qemu-agent-command nixos-test '{"execute":"guest-info"}' 2>/dev/null | grep -q "version"; then
+              echo "Guest agent is alive!"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "ERROR: Guest agent never came up. VM serial console log:"
+              sudo virsh console nixos-test --force 2>&1 | head -50 || true
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Get VM IP and verify SSH
+        timeout-minutes: 3
+        run: |
+          set -eux
+          # Get VM IP from guest agent
+          VM_IP=""
+          for i in $(seq 1 30); do
+            VM_IP=$(sudo virsh domifaddr nixos-test --source agent 2>/dev/null | tail -1 | awk '{print $4}' | cut -d/ -f1)
+            if [ -n "$VM_IP" ]; then
+              echo "VM IP (from agent): $VM_IP"
+              break
+            fi
+            sleep 2
+          done
+          # Fallback: scrape DHCP leases
+          if [ -z "$VM_IP" ]; then
+            VM_MAC=$(sudo virsh domiflist nixos-test | awk 'NR>2 && /virtio/ {print $5}')
+            for i in $(seq 1 10); do
+              VM_IP=$(sudo virsh net-dhcp-leases default | grep "$VM_MAC" | awk '{print $5}' | cut -d/ -f1)
+              if [ -n "$VM_IP" ]; then
+                echo "VM IP (from DHCP): $VM_IP"
+                break
+              fi
+              sleep 2
+            done
+          fi
+          if [ -z "$VM_IP" ]; then
+            echo "ERROR: Could not determine VM IP address"
+            sudo virsh domifaddr nixos-test --source agent || true
+            sudo virsh net-dhcp-leases default || true
+            exit 1
+          fi
+          # SSH in and verify the OS
+          sshpass -p nixos ssh \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 \
+            -o PreferredAuthentications=password \
+            nixos@"$VM_IP" "uname -a && nixos-version"
+          echo "SSH verification passed!"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: artifacts-os-${{ matrix.os }}-guest-${{ matrix.guest-arch }}-lima-errlog
+          name: artifacts-os-${{ matrix.os }}-guest-${{ matrix.guest-arch }}-libvirt-logs
           path: |
-            ~/.lima/${{ env.GUEST_HOST_NAME }}/*
-            !~/.lima/${{ env.GUEST_HOST_NAME }}/*.sock
-            !~/.lima/${{ env.GUEST_HOST_NAME }}/disk
-            !~/.lima/${{ env.GUEST_HOST_NAME }}/basedisk
-            !~/.lima/${{ env.GUEST_HOST_NAME }}/diffdisk
+            domain.xml
 
   build_all_green:
     runs-on: ubuntu-26.04

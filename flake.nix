@@ -26,7 +26,7 @@
           img = nixos-generators.nixosGenerate {
             inherit pkgs;
             modules = [
-              ./lima.nix
+              ./libvirt.nix
             ];
             format = "qcow-efi";
           };
@@ -41,10 +41,8 @@
           default = pkgs.mkShell {
             packages = [
               pkgs.qemu
-              (pkgs.lima.override {
-                withAdditionalGuestAgents = true;
-                qemu = pkgs.qemu;
-              })
+              pkgs.libvirt
+              pkgs.virt-manager
             ];
           };
         }
@@ -56,19 +54,17 @@
         system = "aarch64-linux";
         specialArgs = attrs;
         modules = [
-          ./lima.nix
+          ./libvirt.nix
         ];
       };
       nixosConfigurations.nixos-x86_64 = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         specialArgs = attrs;
         modules = [
-          ./lima.nix
+          ./libvirt.nix
         ];
       };
 
-      nixosModules.lima = {
-        imports = [ ./lima-init.nix ];
-      };
+      nixosModules.libvirt = import ./libvirt-guest.nix;
     };
 }
