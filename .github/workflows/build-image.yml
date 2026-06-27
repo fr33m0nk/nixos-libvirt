@@ -80,14 +80,14 @@ jobs:
           sudo apt-get install -y ovmf qemu-efi-aarch64 sshpass
           sudo systemctl start libvirtd
           sudo systemctl enable libvirtd
-          # Detect actual UEFI firmware paths (filenames vary by distro: OVMF_CODE.fd vs OVMF_CODE_4M.fd, etc.)
-          # Prefer standard firmware over secure-boot/snakeoil variants.
+          # Detect UEFI firmware paths. Exclude secboot/snakeoil variants
+          # which require keys the VM doesn't have.
           if [ "${{ matrix.guest-arch }}" = "aarch64" ]; then
-            OVMF_CODE=$(find /usr/share/AAVMF -name 'AAVMF_CODE.fd' -print -quit || find /usr/share/AAVMF -name 'AAVMF_CODE*' -print -quit)
-            OVMF_VARS=$(find /usr/share/AAVMF -name 'AAVMF_VARS.fd' -print -quit || find /usr/share/AAVMF -name 'AAVMF_VARS*' ! -name '*snakeoil*' -print -quit)
+            OVMF_CODE=$(find /usr/share/AAVMF -name 'AAVMF_CODE*' ! -name '*secboot*' -print -quit)
+            OVMF_VARS=$(find /usr/share/AAVMF -name 'AAVMF_VARS*' ! -name '*snakeoil*' ! -name '*secboot*' -print -quit)
           else
-            OVMF_CODE=$(find /usr/share/OVMF -name 'OVMF_CODE.fd' -print -quit || find /usr/share/OVMF -name 'OVMF_CODE*' -print -quit)
-            OVMF_VARS=$(find /usr/share/OVMF -name 'OVMF_VARS.fd' -print -quit || find /usr/share/OVMF -name 'OVMF_VARS*' -print -quit)
+            OVMF_CODE=$(find /usr/share/OVMF -name 'OVMF_CODE*' -print -quit)
+            OVMF_VARS=$(find /usr/share/OVMF -name 'OVMF_VARS*' -print -quit)
           fi
           echo "OVMF_CODE=$OVMF_CODE" >> "$GITHUB_ENV"
           echo "OVMF_VARS=$OVMF_VARS" >> "$GITHUB_ENV"
