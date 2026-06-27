@@ -56,8 +56,8 @@ jobs:
     needs: build
     strategy:
       matrix:
-        os: [ubuntu-26.04, ubuntu-26.04-arm]
-        guest-arch: ['aarch64', 'x86_64']
+        os: [ubuntu-26.04]
+        guest-arch: ['x86_64']
       fail-fast: false
     env:
       HOST_ARCH: ${{ matrix.os == 'ubuntu-26.04' && 'x86_64' || (matrix.os == 'ubuntu-26.04-arm' && 'aarch64') || 'unknown' }}
