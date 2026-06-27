@@ -29,15 +29,15 @@ Download the latest release image from [GitHub Releases](https://github.com/fr33
 
 ```bash
 # Download the image for your architecture
-curl -LO https://github.com/fr33m0nk/nixos-libvirt/releases/download/v0.2.1/nixos-libvirt-v0.2.1-x86_64.qcow2
+curl -LO https://github.com/fr33m0nk/nixos-libvirt/releases/download/v0.0.1/nixos-libvirt-v0.0.1-x86_64.qcow2
 # Or for aarch64:
-curl -LO https://github.com/fr33m0nk/nixos-libvirt/releases/download/v0.2.1/nixos-libvirt-v0.2.1-aarch64.qcow2
+curl -LO https://github.com/fr33m0nk/nixos-libvirt/releases/download/v0.0.1/nixos-libvirt-v0.0.1-aarch64.qcow2
 ```
 
 Copy the image and start the VM:
 
 ```bash
-sudo cp nixos-libvirt-v0.2.1-x86_64.qcow2 /var/lib/libvirt/images/nixos.qcow2
+sudo cp nixos-libvirt-v0.0.1-x86_64.qcow2 /var/lib/libvirt/images/nixos.qcow2
 sudo qemu-img resize /var/lib/libvirt/images/nixos.qcow2 +10G
 
 # Define and start the VM using the provided domain template
