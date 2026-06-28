@@ -65,6 +65,9 @@ in
 
     # ---- cloud-init: SSH keys and user-data from cidata ISO ----
     services.cloud-init.enable = true;
+    services.cloud-init.settings = {
+      datasource_list = [ "NoCloud" ];
+    };
 
     # ---- serial console: virsh console ----
     boot.kernelParams = [ "console=ttyS0,115200" ];
