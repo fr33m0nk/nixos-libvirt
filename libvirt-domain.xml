@@ -54,5 +54,9 @@
     <video>
       <model type="qxl"/>
     </video>
+    <!-- virtio memory balloon: host can reclaim unused guest RAM -->
+    <memballoon model="virtio">
+      <stats period="10"/>
+    </memballoon>
   </devices>
 </domain>
