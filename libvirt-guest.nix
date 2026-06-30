@@ -63,11 +63,9 @@ in
     # ---- guest agent: virsh domifaddr, virsh shutdown, etc. ----
     services.qemuGuest.enable = true;
 
-    # ---- cloud-init: SSH keys and user-data from cidata ISO ----
+    # ---- cloud-init: SSH keys and user-data from cidata ISO
+    # No-op when no cidata ISO is attached (boots without errors).
     services.cloud-init.enable = true;
-    services.cloud-init.settings = {
-      datasource_list = [ "NoCloud" ];
-    };
 
     # ---- serial console: virsh console ----
     boot.kernelParams = [ "console=ttyS0,115200" ];
