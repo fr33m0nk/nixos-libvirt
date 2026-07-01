@@ -67,6 +67,7 @@
   environment.systemPackages = with pkgs; [
     nextvi
     gitMinimal
+    cachix
   ];
 
   system.stateVersion = "26.05";

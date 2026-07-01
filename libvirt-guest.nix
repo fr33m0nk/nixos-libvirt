@@ -70,6 +70,8 @@ in
     # ---- serial console: virsh console ----
     boot.kernelParams = [ "console=ttyS0,115200" ];
 
+    environment.systemPackages = [ pkgs.cachix ];
+
     # ---- virtiofs ----
     boot.kernelModules = lib.mkIf cfg.virtiofs.enable [ "virtiofs" ];
 
