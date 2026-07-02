@@ -1,0 +1,71 @@
+name: Build and cache toolchain packages
+
+# Builds heavy packages (emacs, clojure-lsp, heroku) on aarch64 CI,
+# pushes to Cachix so the RK3588 downloads pre-built binaries.
+#
+# Runs on push to the 'toolchain-cache' branch.
+
+on:
+  push:
+    branches: ['toolchain-cache']
+  workflow_dispatch:
+
+jobs:
+  build-toolchain:
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 360  # 6 hours — emacs + clojure-lsp native-image need it
+    steps:
+      - name: Checkout nixos-libvirt
+        uses: actions/checkout@v6
+
+      - name: Checkout libvirt-nix
+        uses: actions/checkout@v6
+        with:
+          repository: fr33m0nk/libvirt-nix
+          path: libvirt-nix
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            system-features = aarch64-linux
+            max-jobs = 1
+            cores = 4
+
+      - name: Build toolchain packages and push to Cachix
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          set -eux
+
+          FLAKE="path:./libvirt-nix"
+          CACHE="fr33m0nk"
+
+          # Authenticate with Cachix
+          echo "$CACHIX_AUTH_TOKEN" | cachix authtoken --stdin
+          cachix use "$CACHE"
+
+          # Build each heavy package sequentially (max-jobs=1 to avoid OOM)
+          for pkg in emacs clojure-lsp heroku; do
+            echo "=== Building: $pkg ==="
+            nix build "${FLAKE}#packages.aarch64-linux.${pkg}" \
+              --extra-experimental-features "nix-command flakes" \
+              --print-build-logs \
+              --no-link \
+              --out-link "result-${pkg}" || {
+                echo "ERROR: Build of $pkg failed — continuing to push what we have"
+              }
+          done
+
+          # Push all built store paths to Cachix
+          echo "=== Pushing to Cachix ==="
+          cachix push "$CACHE" result-emacs result-clojure-lsp result-heroku || true
+
+          echo "=== Done ==="
+
+      - name: Upload flake.lock
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: flake-lock
+          path: libvirt-nix/flake.lock
